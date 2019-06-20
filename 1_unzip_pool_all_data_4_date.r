@@ -28,13 +28,15 @@ lapply(temp, function(x) gunzip(x))
 
 
 # POOLING ALL TXT FILES INTO ONE ALL DATA DF
+library(gtools) # required for smartbind() functions enabling merging diff number of columns
+       
 cdir<-choose.dir(default = "", caption = "Choose dir with data files")
 myfiles <- list.files(path = cdir, pattern = NULL, all.files = FALSE, full.names = FALSE, recursive = FALSE, ignore.case = FALSE)
 
 
 
 # pool all files into a big df. edit lapply() accordingly
-all_data_df = do.call(rbind, lapply(myfiles, 
+all_data_df = do.call(smartbind, lapply(myfiles, 
                                     function(x) 
                                       read.table(x, header=F, sep=",", quote='"', 
                                                  dec=".", na.strings="", colClasses="character", 

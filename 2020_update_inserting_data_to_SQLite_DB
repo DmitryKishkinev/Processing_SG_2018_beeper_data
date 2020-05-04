@@ -1,0 +1,142 @@
+# This script adds data for a givel folder into SQLite DB. You can make a function out of the script and loop through all daily folders to append each to a growing 
+# SQLite DB. Working with a all-data DB is much quicker and easier for querying data using SQL queries
+
+library(R.utils)
+library(gtools) # required for smartbind() functions enabling merging diff number of columns
+library(RSQLite)
+
+# choose a folder with your data for a particular date
+path_to_dir<-choose.dir(default = "", caption = "Choose dir with data files")
+setwd(path_to_dir)
+
+
+# list of all files. you cant do all NOT matching a pattern
+all_files <- list.files()
+
+# using grep() and invert=TRUE we extract names of both files and subfolders to delete and keep only *.gz
+all_files_folders_to_delete <- grep(all_files, pattern='*.gz', inv=TRUE, value=TRUE)
+
+
+# just in case: delete all sub-folders that might be in your folder (might be not there as well) 
+# with recursively options so all subfolders inside them deleted too
+# and all NON-gz files
+for(i in 1:length(all_files_folders_to_delete)){
+  unlink(all_files_folders_to_delete[i], recursive = TRUE)
+}
+
+# again list all files - now they all must be only *.gz files
+all_files <- list.files()
+
+# un-gz all files by lapply function. Replaced all gz files with uncompressed txt files
+lapply(all_files, function(x) gunzip(x))
+
+# remove files with size 0 otherwise the below do.call() would spit out error
+# All document names:
+all_files <- list.files(pattern = "*.txt")
+# Use file.size() immediate, instead of file.info(docs)$size:
+inds <- file.size(all_files) == 0
+# Remove all documents with file.size = 1 from the directory
+file.remove(all_files[inds])
+
+
+# POOLING ALL TXT FILES INTO ONE ALL DATA DF
+
+
+# pool all files into a big df. edit lapply() accordingly
+all_files <- list.files(pattern = "*.txt")
+all_data_df = do.call(smartbind, lapply(all_files, 
+                                        function(x) 
+                                          read.table(x, header=F, sep=",", quote='"', 
+                                                     dec=".", na.strings="", colClasses="character", 
+                                                     fill=TRUE, strip.white=TRUE, blank.lines.skip=TRUE, 
+                                                     stringsAsFactors = FALSE)))
+
+# remove the last column V7 (never used and contains NA)
+all_data_df$V7 <- NULL
+
+# sorting in an asceding order by V2 column (time stamp)
+all_data_df<-all_data_df[order(all_data_df$V2),]
+
+# HERE NEED TO RENAME ALL ROWS. SIMPLY DELETING OLD ROWNAMES WILL DO THE JOB (AUTOMATIC RENAMING)
+rownames(all_data_df) <- NULL
+
+# go over rows using  FOR LOOP, always renew current radio frequency value unless a row
+# starts with "p" (a row with radio tag data). in this case add the freq value to radio freq offset
+# V3 (offset) is now substituted with real frequency in kHz
+
+for (i in 1:nrow(all_data_df)){
+  if(grepl("S", all_data_df$V1[i])){current_freq=all_data_df$V5[i]}
+  if(grepl("p", all_data_df$V1[i])){
+    all_data_df$V3[i]=as.numeric(all_data_df$V3[i])+as.numeric(gsub('.','',current_freq, fixed=TRUE))
+  }
+}
+
+# FINDING INDEXES OF ROWS WITH V1 column containing "p" (port, rows with radio hits)
+# discard all rows except of the ones starting with "p"
+ind_rows = which(grepl("p", all_data_df$V1))
+df_only_hits<-all_data_df[ind_rows, ]
+
+# HERE NEED TO RENAME ALL ROWS. SIMPLY DELETING OLD ROWNAMES WILL DO THE JOB (AUTOMATIC RENAMING)
+rownames(df_only_hits) <- NULL
+
+# add a column with SNR (is it just addition of signal and noise bc they are in dB?)
+df_only_hits$V6=(abs(as.numeric(df_only_hits$V4)) - abs(as.numeric(df_only_hits$V5)))
+
+df_only_hits$V2 <- as.numeric(df_only_hits$V2)
+df_only_hits$V3 <- as.numeric(df_only_hits$V3)
+df_only_hits$V4 <- as.numeric(df_only_hits$V4)
+df_only_hits$V5 <- as.numeric(df_only_hits$V5)
+df_only_hits$V6 <- as.numeric(df_only_hits$V6)
+
+# add content for a solumn with Site name
+df_only_hits$V7 <- 'RYB' # column for a field site
+
+# Name all columns
+colnames(df_only_hits) <- c("Port", "Timestamp","Freq_Detected","Signal","BG","SNR","Site")
+
+######(bit for SQLite DB)
+#### DUMP/APPEND DATA HITS TO EXISTING DB
+
+# creating a DB locally
+
+conn <- dbConnect(SQLite(), dbname="C:/my science_publications/1_Anosmia disrupts short-distance homing in Ascir/DATA_SQLITE/MAKING SQLite DB/SQLite_DB/1_test/your-db.sqlite")
+
+dbWriteTable(
+  conn,
+  "data_only_hits",
+  df_only_hits,
+  row.names = pkgconfig::get_config("RSQLite::row.names.table", FALSE),
+  overwrite = TRUE,
+  append = FALSE,
+  field.types = NULL,
+  temporary = FALSE,
+  
+)
+
+# form dynamics INSERT query, make a journal w pending changes and commit them so db is updated
+dbBegin(conn)
+res <- dbSendQuery(conn, 'INSERT INTO data_only_hits (Port, Timestamp, Freq_Detected, Signal, BG, SNR, Site) VALUES (:Port, :Timestamp, :Freq_Detected, :Signal, :BG, :SNR, :Site);', df_only_hits)
+dbClearResult(res)
+dbCommit(conn)
+
+
+# Useful commands for querying DB
+
+# show all table for this connection
+dbListTables(conn)
+
+# read table of DB as a whole
+df_read <- dbReadTable(conn, "data_only_hits")
+
+# do queries, e.g. show top 10 rows
+dbGetQuery(conn, "SELECT * FROM data_only_hits LIMIT 10")
+
+# query dealing with numerical fields - show particular frequency hits
+res <- dbSendQuery(conn, "SELECT * FROM data_only_hits WHERE Freq_Detected > 151080")
+
+# query dealing with string fields - show particular port hits
+res <- dbSendQuery(conn, "SELECT * FROM data_only_hits WHERE Port LIKE '%p3%' ")
+
+# show a result of query - to see the result of SQL query - after all the queries above and overall
+dbFetch(res)
+

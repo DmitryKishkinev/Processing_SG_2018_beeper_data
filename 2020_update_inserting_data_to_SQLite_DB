@@ -1,4 +1,4 @@
-# This script adds data for a givel folder into SQLite DB. You can make a function out of the script and loop through all daily folders to append each to a growing 
+# This script adds data for a given folder into SQLite DB. You can make a function out of the script and loop through all daily folders to append each to a growing 
 # SQLite DB. Working with a all-data DB is much quicker and easier for querying data using SQL queries
 
 library(R.utils)
